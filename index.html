@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SMART NYUKI - Live Dashboard</title>
+
+  <!-- MQTT.js CDN -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <!-- Firebase SDK (v10 compat) - optional for logging, you can remove if not needed -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --card: white;
+      --text: #333;
+      --accent: #ff9800;
+      --progress: #4caf50;
+    }
+    [data-theme="dark"] {
+      --bg: #121212;
+      --card: #1e1e1e;
+      --text: #e0e0e0;
+      --accent: #ffb74d;
+      --progress: #66bb6a;
+    }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px;
+      transition: all 0.3s;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    h1 {
+      color: var(--accent);
+      margin: 0;
+      font-size: 2.2rem;
+    }
+    .controls {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .theme-toggle {
+      padding: 8px 16px;
+      background: #444;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .hive-container {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .hive {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+      transition: transform 0.2s;
+    }
+    .hive:hover {
+      transform: translateY(-3px);
+    }
+    .metric {
+      font-size: 2.1rem;
+      font-weight: bold;
+      margin: 15px 0;
+      color: var(--accent);
+    }
+    .progress-bar {
+      height: 28px;
+      background: #e0e0e0;
+      border-radius: 14px;
+      overflow: hidden;
+      margin: 12px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--progress);
+      width: 0%;
+      transition: width 0.8s ease;
+    }
+    .status {
+      margin-top: 15px;
+      font-weight: bold;
+      min-height: 24px;
+    }
+    .success { color: #4caf50; }
+    .error   { color: #f44336; }
+    button {
+      padding: 14px 28px;
+      font-size: 1.1rem;
+      background: #ff5722;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover:not(:disabled) {
+      background: #e64a19;
+    }
+    button:disabled {
+      background: #aaa;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body data-theme="light">
+
+  <header>
+    <h1>🐝 SMART NYUKI - Live Dashboard</h1>
+    <div class="controls">
+      <button class="theme-toggle" onclick="toggleTheme()">Toggle Dark Mode</button>
+    </div>
+  </header>
+
+  <div class="hive-container">
+    <div class="hive">
+      <h2>Hive 1</h2>
+      <div class="metric">Weight: <span id="weight">0.00</span> kg</div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress"></div>
+      </div>
+      <div><strong id="percent">0%</strong> full</div>
+
+      <button id="harvestBtn" onclick="sendHarvest()" disabled>HARVEST HONEY</button>
+
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== Theme Toggle ====================
+    function toggleTheme() {
+      const body = document.body;
+      const current = body.getAttribute('data-theme');
+      body.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+    }
+
+    // ==================== Firebase Config (replace with YOUR config) ====================
+    const firebaseConfig = {
+      apiKey: "AIzaSyAn-iP1uQZjCQbKU-b7fYU4l_C1D_WKFtM",
+      authDomain: "smartnyuki-af5f1.firebaseapp.com",
+      databaseURL: "https://smartnyuki-af5f1-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "smartnyuki-af5f1",
+      storageBucket: "smartnyuki-af5f1.firebasestorage.app",
+      messagingSenderId: "1002733944124",
+      appId: "1:1002733944124:web:710e41686b2a3b125c7239"
+    };
+
+    // Initialize Firebase (optional - remove if not using)
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // ==================== MQTT Connection (non-secure for better browser compatibility) ====================
+    const mqttOptions = {
+      connectTimeout: 5000,
+      clientId: 'web-dashboard-' + Math.random().toString(16).substr(2, 8),
+      username: '',
+      password: '',
+      keepalive: 60,
+      clean: true,
+    };
+
+    const client = mqtt.connect('ws://broker.emqx.io:8083/mqtt', mqttOptions);
+
+    client.on('connect', () => {
+      console.log('MQTT Connected to EMQX (ws://8083)');
+      document.getElementById('status').textContent = 'Connected to MQTT broker';
+      document.getElementById('status').className = 'status success';
+
+      client.subscribe('smartnyuki/hive/1/weight', (err) => {
+        if (!err) {
+          console.log('Subscribed to smartnyuki/hive/1/weight');
+        } else {
+          console.error('Subscribe error:', err);
+        }
+      });
+    });
+
+    client.on('message', (topic, message) => {
+      const msg = message.toString().trim();
+      console.log(`Received [${topic}]: "${msg}"`);
+
+      if (topic === 'smartnyuki/hive/1/weight') {
+        const weight = parseFloat(msg) || 0;
+        console.log('Parsed weight:', weight);
+
+        document.getElementById('weight').textContent = weight.toFixed(2);
+
+        // Adjust divisor (300 kg = 100%) based on your max expected weight
+        const level = Math.min(100, Math.max(0, Math.round((weight / 300) * 100)));
+        document.getElementById('percent').textContent = level + '%';
+        document.getElementById('progress').style.width = level + '%';
+
+        const btn = document.getElementById('harvestBtn');
+        btn.disabled = false;
+        btn.style.opacity = (level < 50) ? '0.6' : '1';  // Dim button if <50%, but still clickable;
+      }
+    });
+
+    client.on('error', (err) => {
+      console.error('MQTT error:', err);
+      document.getElementById('status').textContent = 'MQTT connection error - check console';
+      document.getElementById('status').className = 'status error';
+    });
+
+    // ==================== Send Harvest Command ====================
+    function sendHarvest() {
+      if (confirm("Confirm harvest for Hive 1?")) {
+        client.publish('smartnyuki/hive/1/harvest', 'OPEN', { qos: 1 }, (err) => {
+          const statusEl = document.getElementById('status');
+          if (!err) {
+            statusEl.textContent = "Harvest command sent! Waiting for servo...";
+            statusEl.className = 'status success';
+          } else {
+            statusEl.textContent = "Failed to send command: " + err;
+            statusEl.className = 'status error';
+          }
+          setTimeout(() => statusEl.textContent = '', 8000);
+        });
+      }
+    }
+
+    // Initial status
+    document.getElementById('status').textContent = 'Connecting to MQTT broker...';
+  </script>
+</body>
+</html>
